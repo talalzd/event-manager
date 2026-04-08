@@ -136,7 +136,7 @@ function RegistrationForm({ eventCode }) {
         <div style={{ ...R.card,textAlign:"center",padding:40 }}>
           <div style={{ fontSize:64,marginBottom:16 }}>✅</div>
           <h2 style={{ color:"#00d278",margin:"0 0 12px",fontSize:24 }}>تم التسجيل بنجاح</h2>
-          <p style={{ color:"#c0c0e0",fontSize:15,lineHeight:1.7 }}>تم استلام طلبك بنجاح. سيتم مراجعته من قبل المنظمين.</p>
+          <p style={{ color:"#c0c0e0",fontSize:15,lineHeight:1.7 }}>تم استلام طلبك بنجاح. سيتم مراجعته من قبل المشرفين.</p>
         </div>
       </div>
     </div>
@@ -244,6 +244,111 @@ function RegistrationForm({ eventCode }) {
   );
 }
 
+// ═══ SELF CHECK-IN PAGE (Arabic RTL) ═══
+function CheckInPage({ eventCode }) {
+  const [event, setEvent] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [identifier, setIdentifier] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [result, setResult] = useState(null);
+
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.from('events').select('*').eq('barcode_id', eventCode).maybeSingle();
+      setEvent(data);
+      setLoading(false);
+    })();
+  }, [eventCode]);
+
+  const handleCheckIn = async () => {
+    if (!identifier.trim()) return;
+    setSubmitting(true);
+    setResult(null);
+    const { data, error } = await supabase.rpc('self_checkin', {
+      p_event_code: eventCode,
+      p_identifier: identifier.trim(),
+    });
+    setSubmitting(false);
+    if (error) { setResult({ success: false, error: error.message }); return; }
+    setResult(data);
+    if (data.success) setIdentifier("");
+  };
+
+  const C = {
+    page: { minHeight:"100vh",background:"linear-gradient(145deg,#0d0d1a 0%,#1a1a2e 40%,#16213e 100%)",fontFamily:"'Tajawal','Noto Kufi Arabic',sans-serif",color:"#e0e0f0",padding:"24px 16px",direction:"rtl",display:"flex",alignItems:"center",justifyContent:"center" },
+    container: { maxWidth:480,width:"100%" },
+    card: { background:"rgba(30,30,55,0.7)",borderRadius:16,border:"1px solid rgba(108,99,255,0.15)",padding:28 },
+    title: { fontSize:24,fontWeight:800,margin:"0 0 6px",background:"linear-gradient(135deg,#6c63ff,#00d2ff)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent",textAlign:"center" },
+    label: { fontSize:14,fontWeight:600,color:"#c0c0e0",marginBottom:8,display:"block" },
+    input: { width:"100%",padding:"14px 18px",borderRadius:12,border:"1px solid rgba(108,99,255,0.25)",background:"rgba(15,15,35,0.8)",color:"#e0e0f0",fontSize:16,fontFamily:"inherit",outline:"none",boxSizing:"border-box",textAlign:"right" },
+    btn: { width:"100%",padding:"14px 20px",borderRadius:12,border:"none",cursor:"pointer",fontWeight:700,fontSize:16,fontFamily:"inherit",background:"linear-gradient(135deg,#6c63ff,#5a52e0)",color:"#fff",boxShadow:"0 4px 20px rgba(108,99,255,0.4)",marginTop:8 },
+  };
+
+  if (loading) return <div style={C.page}><div style={{ color:"#6c63ff" }}>جاري التحميل...</div></div>;
+
+  if (!event) return (
+    <div style={C.page}>
+      <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&family=Noto+Kufi+Arabic:wght@400;600;700&display=swap" rel="stylesheet"/>
+      <div style={C.container}>
+        <div style={{ ...C.card,textAlign:"center" }}>
+          <div style={{ fontSize:48,marginBottom:12 }}>⚠️</div>
+          <h2 style={{ color:"#ff5050",margin:"0 0 8px" }}>الفعالية غير موجودة</h2>
+          <p style={{ color:"#7a7a9e" }}>الرابط غير صحيح أو انتهت الفعالية</p>
+        </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={C.page}>
+      <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&family=Noto+Kufi+Arabic:wght@400;600;700&display=swap" rel="stylesheet"/>
+      <style>{`input:focus{border-color:#6c63ff!important;box-shadow:0 0 0 3px rgba(108,99,255,0.1)}`}</style>
+      <div style={C.container}>
+        <div style={{ marginBottom:20,textAlign:"center" }}>
+          <div style={{ fontSize:44,marginBottom:8 }}>✅</div>
+          <h1 style={C.title}>تسجيل الحضور</h1>
+          <div style={{ color:"#c0c0e0",fontSize:18,fontWeight:600,marginTop:8 }}>{event.name}</div>
+          {event.location && <div style={{ color:"#7a7a9e",fontSize:13,marginTop:4 }}>📍 {event.location}</div>}
+        </div>
+
+        <div style={C.card}>
+          {result?.success ? (
+            <div style={{ textAlign:"center",padding:"20px 0" }}>
+              <div style={{ fontSize:64,marginBottom:16 }}>🎉</div>
+              <h2 style={{ color:"#00d278",margin:"0 0 12px",fontSize:22 }}>تم تسجيل حضورك بنجاح</h2>
+              <p style={{ color:"#c0c0e0",fontSize:16,marginBottom:20 }}>مرحباً، <strong>{result.name}</strong></p>
+              <button style={{ ...C.btn,background:"rgba(108,99,255,0.15)",color:"#c0c0e0",boxShadow:"none" }} onClick={()=>{setResult(null);setIdentifier("");}}>تسجيل شخص آخر</button>
+            </div>
+          ) : (
+            <>
+              <label style={C.label}>أدخل اسمك الكامل أو رقم الهوية أو الرقم الجامعي</label>
+              <input
+                style={C.input}
+                value={identifier}
+                onChange={e=>setIdentifier(e.target.value)}
+                onKeyDown={e=>e.key==='Enter'&&handleCheckIn()}
+                placeholder="الاسم الكامل أو رقم الهوية"
+                autoFocus
+              />
+              {result && !result.success && (
+                <div style={{ color:"#ff5050",fontSize:14,marginTop:14,padding:"12px 16px",background:"rgba(255,80,80,0.1)",borderRadius:10,textAlign:"center",fontWeight:600 }}>
+                  ⚠️ {result.error}
+                </div>
+              )}
+              <button style={{ ...C.btn,opacity:submitting?0.7:1 }} onClick={handleCheckIn} disabled={submitting}>
+                {submitting ? "جاري التحقق..." : "تأكيد الحضور"}
+              </button>
+              <div style={{ textAlign:"center",fontSize:12,color:"#7a7a9e",marginTop:16,lineHeight:1.6 }}>
+                يجب أن تكون مسجلاً في الفعالية ومعتمداً من قبل المشرفين
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ═══ AUTH SCREEN ═══
 function AuthScreen({ onAuth }) {
   const [mode, setMode] = useState("login");
@@ -304,6 +409,8 @@ export default function App() {
   const path = window.location.pathname;
   const registerMatch = path.match(/^\/register\/(.+)$/);
   if (registerMatch) return <RegistrationForm eventCode={registerMatch[1]}/>;
+  const checkinMatch = path.match(/^\/checkin\/(.+)$/);
+  if (checkinMatch) return <CheckInPage eventCode={checkinMatch[1]}/>;
   return <AdminApp/>;
 }
 
@@ -324,6 +431,7 @@ function AdminApp() {
   const [scanResult, setScanResult] = useState(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [qrModal, setQrModal] = useState(null);
+  const [eventQrModal, setEventQrModal] = useState(null);
   const scanRef = useRef(null);
 
   useEffect(() => {
@@ -407,6 +515,12 @@ function AdminApp() {
     const link = `${window.location.origin}/register/${ev.barcode_id}`;
     navigator.clipboard.writeText(link);
     alert("Registration link copied!\n\n" + link);
+  };
+
+  const copyCheckinLink = (ev) => {
+    const link = `${window.location.origin}/checkin/${ev.barcode_id}`;
+    navigator.clipboard.writeText(link);
+    alert("Check-in link copied!\n\n" + link);
   };
 
   const approveParticipant = async (p) => {
@@ -610,7 +724,8 @@ function AdminApp() {
               </div>
               {isAdmin && (
                 <div style={{ display:"flex",gap:4,flexShrink:0 }}>
-                  <button style={{ ...S.btn(false),padding:"6px 10px" }} title="Copy registration link" onClick={e=>{ e.stopPropagation(); copyRegistrationLink(ev); }}><LinkIcon/></button>
+                  <button style={{ ...S.btn(false),padding:"6px 10px" }} title="Registration link" onClick={e=>{ e.stopPropagation(); copyRegistrationLink(ev); }}><LinkIcon/></button>
+                  <button style={{ ...S.btn(false),padding:"6px 10px",fontSize:11 }} title="Check-in QR code" onClick={e=>{ e.stopPropagation(); setEventQrModal(ev); }}>QR</button>
                   {ev.status !== 'ended' && <button style={{ ...S.btn(false),padding:"6px 10px",fontSize:11 }} onClick={e=>{ e.stopPropagation(); endEvent(ev.id); }}>End</button>}
                   <button style={{ ...S.btn(false),padding:"6px 10px",color:"#ff5050" }} onClick={e=>{ e.stopPropagation(); deleteEvent(ev.id); }}><TrashIcon/></button>
                 </div>
@@ -828,6 +943,34 @@ function AdminApp() {
   };
 
   const renderModal = () => {
+    if (eventQrModal) {
+      const checkinUrl = `${window.location.origin}/checkin/${eventQrModal.barcode_id}`;
+      return (
+        <div style={S.modal} onClick={()=>setEventQrModal(null)}>
+          <div style={{ ...S.modalContent,maxWidth:380,textAlign:"center" }} onClick={e=>e.stopPropagation()}>
+            <h3 style={{ margin:"0 0 4px",fontSize:18 }}>{eventQrModal.name}</h3>
+            <div style={{ fontSize:12,color:"#7a7a9e",marginBottom:16 }}>Event Check-in QR</div>
+            <div style={{ background:"#fff",padding:20,borderRadius:12,display:"inline-block" }}>
+              <QRCodeSVG value={checkinUrl} size={220}/>
+            </div>
+            <div style={{ fontSize:11,color:"#7a7a9e",marginTop:12,wordBreak:"break-all",fontFamily:"monospace" }}>{checkinUrl}</div>
+            <div style={{ fontSize:12,color:"#c0c0e0",marginTop:12,lineHeight:1.5 }}>
+              Display this QR at the venue. Participants scan it, enter their name or ID, and are marked present automatically.
+            </div>
+            <div style={{ display:"flex",gap:8,marginTop:20 }}>
+              <button style={{ ...S.btn(false),flex:1,justifyContent:"center" }} onClick={()=>copyCheckinLink(eventQrModal)}>Copy Link</button>
+              <button style={{ ...S.btn(true),flex:1,justifyContent:"center" }} onClick={()=>{
+                const w = window.open('', '_blank');
+                w.document.write(`<html><head><title>${eventQrModal.name} - Check-in QR</title><script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script></head><body style="font-family:sans-serif;text-align:center;padding:40px"><h1>${eventQrModal.name}</h1><h2 style="color:#666;font-weight:400">امسح الرمز لتسجيل حضورك</h2><div id="qr" style="display:inline-block;padding:20px;background:#fff;border:2px solid #6c63ff;border-radius:16px"></div><p style="font-family:monospace;color:#999;margin-top:20px">${checkinUrl}</p><script>QRCode.toCanvas(document.getElementById('qr').appendChild(document.createElement('canvas')),'${checkinUrl}',{width:400});</script></body></html>`);
+                w.document.close();
+                setTimeout(()=>w.print(),500);
+              }}>Print</button>
+            </div>
+            <button style={{ ...S.btn(false),marginTop:8,width:"100%",justifyContent:"center" }} onClick={()=>setEventQrModal(null)}>Close</button>
+          </div>
+        </div>
+      );
+    }
     if (qrModal) return (
       <div style={S.modal} onClick={()=>setQrModal(null)}>
         <div style={{ ...S.modalContent,maxWidth:340,textAlign:"center" }} onClick={e=>e.stopPropagation()}>
