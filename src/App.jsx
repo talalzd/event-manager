@@ -721,6 +721,7 @@ function AdminApp() {
       const att = eventAttendance.find(a => a.participant_id === p.id);
       return `<tr>
         <td style="padding:6px 8px;border:1px solid #ddd">${p.full_name}</td>
+        <td style="padding:6px 8px;border:1px solid #ddd">${p.national_id || '—'}</td>
         <td style="padding:6px 8px;border:1px solid #ddd">${p.university_id || '—'}</td>
         <td style="padding:6px 8px;border:1px solid #ddd">${p.phone || '—'}</td>
         <td style="padding:6px 8px;border:1px solid #ddd">${p.barcode_id}</td>
@@ -742,7 +743,7 @@ function AdminApp() {
       </div>
       <h2>Attendance</h2>
       <table style="width:100%;border-collapse:collapse">
-        <thead><tr style="background:#f5f5ff"><th style="padding:8px;border:1px solid #ddd">Name</th><th style="padding:8px;border:1px solid #ddd">University ID</th><th style="padding:8px;border:1px solid #ddd">Phone</th><th style="padding:8px;border:1px solid #ddd">Code</th><th style="padding:8px;border:1px solid #ddd">Status</th><th style="padding:8px;border:1px solid #ddd">Time</th></tr></thead>
+        <thead><tr style="background:#f5f5ff"><th style="padding:8px;border:1px solid #ddd">Name</th><th style="padding:8px;border:1px solid #ddd">National ID</th><th style="padding:8px;border:1px solid #ddd">University ID</th><th style="padding:8px;border:1px solid #ddd">Phone</th><th style="padding:8px;border:1px solid #ddd">Code</th><th style="padding:8px;border:1px solid #ddd">Status</th><th style="padding:8px;border:1px solid #ddd">Time</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </body></html>`);
