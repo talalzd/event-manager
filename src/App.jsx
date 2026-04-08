@@ -23,7 +23,7 @@ const Badge = ({ children, color = "#6c63ff" }) => (
   <span style={{ display:"inline-flex",alignItems:"center",gap:4,padding:"2px 10px",borderRadius:20,fontSize:11,fontWeight:600,background:color+"18",color,letterSpacing:0.3 }}>{children}</span>
 );
 
-const TABS = ["Events", "Pending", "Participants", "Groups", "Attendance", "Reports"];
+const TABS = ["Events", "Pending", "Participants", "Groups", "Attendance", "Reports", "Questions"];
 
 const S = {
   app: { minHeight:"100vh", background:"linear-gradient(145deg,#0d0d1a 0%,#1a1a2e 40%,#16213e 100%)", fontFamily:"'Outfit','Segoe UI',sans-serif", color:"#e0e0f0" },
@@ -50,6 +50,8 @@ function RegistrationForm({ eventCode }) {
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState("");
+  const [questions, setQuestions] = useState([]);
+  const [extraAnswers, setExtraAnswers] = useState({});
   const [form, setForm] = useState({
     full_name: "", gender: "", phone: "",
     national_id_type: "", national_id: "",
@@ -60,8 +62,12 @@ function RegistrationForm({ eventCode }) {
 
   useEffect(() => {
     (async () => {
-      const { data } = await supabase.from('events').select('*').eq('barcode_id', eventCode).maybeSingle();
-      setEvent(data);
+      const [ev, qs] = await Promise.all([
+        supabase.from('events').select('*').eq('barcode_id', eventCode).maybeSingle(),
+        supabase.from('form_questions').select('*').order('order_index', { ascending: true }),
+      ]);
+      setEvent(ev.data);
+      setQuestions(qs.data || []);
       setLoading(false);
     })();
   }, [eventCode]);
@@ -73,6 +79,12 @@ function RegistrationForm({ eventCode }) {
     const required = ['full_name','gender','phone','national_id_type','national_id','university_id','university_email','is_volunteer_member','has_organizing_experience'];
     for (const k of required) {
       if (!form[k]) { setError("جميع الحقول مطلوبة"); return; }
+    }
+    // Validate dynamic questions
+    for (const q of questions) {
+      if (q.is_required && !extraAnswers[q.id]) {
+        setError("جميع الحقول مطلوبة"); return;
+      }
     }
     if (!form.pledge_attendance || !form.pledge_guidelines) {
       setError("يجب الموافقة على التعهدات"); return;
@@ -92,6 +104,7 @@ function RegistrationForm({ eventCode }) {
       has_organizing_experience: form.has_organizing_experience === 'yes',
       pledge_attendance: form.pledge_attendance,
       pledge_guidelines: form.pledge_guidelines,
+      extra_answers: extraAnswers,
       status: 'pending',
       is_leader: false,
     });
@@ -150,10 +163,12 @@ function RegistrationForm({ eventCode }) {
         <div style={{ marginBottom:20,textAlign:"center" }}>
           <h1 style={R.title}>التسجيل في الفعالية</h1>
           <div style={{ color:"#c0c0e0",fontSize:18,fontWeight:600,marginTop:8 }}>{event.name}</div>
-          {event.start_date && <div style={{ color:"#7a7a9e",fontSize:13,marginTop:4 }}>
-            {new Date(event.start_date + 'T00:00:00').toLocaleDateString('ar-SA')}
-            {event.end_date && ` - ${new Date(event.end_date + 'T00:00:00').toLocaleDateString('ar-SA')}`}
-          </div>}
+          {event.description && <div style={{ color:"#a0a0c0",fontSize:14,marginTop:10,lineHeight:1.7,padding:"12px 16px",background:"rgba(108,99,255,0.06)",borderRadius:10,textAlign:"right" }}>{event.description}</div>}
+          <div style={{ color:"#7a7a9e",fontSize:13,marginTop:10,display:"flex",flexDirection:"column",gap:4 }}>
+            {event.start_date && <div>📅 {new Date(event.start_date + 'T00:00:00').toLocaleDateString('ar-SA')}{event.end_date && event.end_date !== event.start_date && ` - ${new Date(event.end_date + 'T00:00:00').toLocaleDateString('ar-SA')}`}</div>}
+            {(event.start_time || event.end_time) && <div>🕐 {event.start_time?.slice(0,5) || ''}{event.end_time && ` - ${event.end_time.slice(0,5)}`}</div>}
+            {event.location && <div>📍 {event.location}</div>}
+          </div>
         </div>
 
         <div style={R.card}>
@@ -214,6 +229,21 @@ function RegistrationForm({ eventCode }) {
               <div style={R.radio(form.has_organizing_experience==='no')} onClick={()=>update('has_organizing_experience','no')}>لا</div>
             </div>
           </div>
+
+          {/* Dynamic admin-managed questions */}
+          {questions.map(q => (
+            <div key={q.id} style={R.field}>
+              <label style={R.label}>{q.label_ar}{q.is_required && ' *'}</label>
+              {q.field_type === 'yes_no' ? (
+                <div style={R.radioGroup}>
+                  <div style={R.radio(extraAnswers[q.id]==='yes')} onClick={()=>setExtraAnswers(a=>({...a,[q.id]:'yes'}))}>نعم</div>
+                  <div style={R.radio(extraAnswers[q.id]==='no')} onClick={()=>setExtraAnswers(a=>({...a,[q.id]:'no'}))}>لا</div>
+                </div>
+              ) : (
+                <input style={R.input} value={extraAnswers[q.id] || ''} onChange={e=>setExtraAnswers(a=>({...a,[q.id]:e.target.value}))}/>
+              )}
+            </div>
+          ))}
 
           <div style={R.field}>
             <label style={R.label}>التعهدات *</label>
@@ -390,7 +420,6 @@ function AuthScreen({ onAuth }) {
           </div>
           {mode === "signup" && (<>
             <div style={{ marginBottom:14 }}><label style={S.label}>Full Name</label><input style={S.input} value={fullName} onChange={e=>setFullName(e.target.value)}/></div>
-            <div style={{ marginBottom:14 }}><label style={S.label}>Role</label><select style={S.input} value={role} onChange={e=>setRole(e.target.value)}><option value="admin">Admin</option><option value="leader">Leader</option></select></div>
           </>)}
           <div style={{ marginBottom:14 }}><label style={S.label}>Email</label><input style={S.input} type="email" value={email} onChange={e=>setEmail(e.target.value)}/></div>
           <div style={{ marginBottom:18 }}><label style={S.label}>Password</label><input style={S.input} type="password" value={password} onChange={e=>setPassword(e.target.value)} onKeyDown={e=>e.key==='Enter'&&handleSubmit()}/></div>
@@ -425,6 +454,7 @@ function AdminApp() {
   const [participants, setParticipants] = useState([]);
   const [groups, setGroups] = useState([]);
   const [attendance, setAttendance] = useState([]);
+  const [formQuestions, setFormQuestions] = useState([]);
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [scanMode, setScanMode] = useState(false);
   const [scanInput, setScanInput] = useState("");
@@ -454,16 +484,18 @@ function AdminApp() {
   useEffect(() => { if (user) loadAllData(); }, [user]);
 
   const loadAllData = async () => {
-    const [ev, pa, gr, at] = await Promise.all([
+    const [ev, pa, gr, at, fq] = await Promise.all([
       supabase.from('events').select('*').order('created_at', { ascending: false }),
       supabase.from('participants').select('*').order('created_at', { ascending: true }),
       supabase.from('groups').select('*').order('created_at', { ascending: true }),
       supabase.from('attendance').select('*'),
+      supabase.from('form_questions').select('*').order('order_index', { ascending: true }),
     ]);
     if (ev.data) setEvents(ev.data);
     if (pa.data) setParticipants(pa.data);
     if (gr.data) setGroups(gr.data);
     if (at.data) setAttendance(at.data);
+    if (fq.data) setFormQuestions(fq.data);
   };
 
   useEffect(() => {
@@ -488,6 +520,8 @@ function AdminApp() {
       location: document.getElementById('ev-loc')?.value || '',
       start_date: document.getElementById('ev-start')?.value || null,
       end_date: document.getElementById('ev-end')?.value || null,
+      start_time: document.getElementById('ev-stime')?.value || null,
+      end_time: document.getElementById('ev-etime')?.value || null,
       barcode_id: genCode("EV"),
       created_by: user.id,
     }).select().single();
@@ -621,6 +655,32 @@ function AdminApp() {
       setScanInput("");
       setTimeout(() => setScanResult(null), 3000);
     }
+  };
+
+  // ─── DYNAMIC QUESTIONS CRUD (admin only) ───
+  const addQuestion = async () => {
+    const label = document.getElementById('q-label')?.value?.trim();
+    const ftype = document.getElementById('q-type')?.value;
+    if (!label) return;
+    const { data } = await supabase.from('form_questions').insert({
+      label_ar: label,
+      field_type: ftype,
+      is_required: true,
+      order_index: formQuestions.length + 1,
+    }).select().single();
+    if (data) { setFormQuestions(prev => [...prev, data]); setModal(null); }
+  };
+
+  const deleteQuestion = async (id) => {
+    if (!confirm("Delete this question? Existing answers will be kept.")) return;
+    await supabase.from('form_questions').delete().eq('id', id);
+    setFormQuestions(prev => prev.filter(q => q.id !== id));
+  };
+
+  const updateQuestion = async (id, newLabel) => {
+    if (!newLabel?.trim()) return;
+    await supabase.from('form_questions').update({ label_ar: newLabel.trim() }).eq('id', id);
+    setFormQuestions(prev => prev.map(q => q.id === id ? { ...q, label_ar: newLabel.trim() } : q));
   };
 
   const currentEvent = events.find(e => e.id === selectedEvent);
@@ -763,6 +823,12 @@ function AdminApp() {
                   <div>👤 {p.gender === 'male' ? 'Male' : 'Female'}</div>
                   <div>🤝 Volunteer unit: {p.is_volunteer_member ? 'Yes' : 'No'}</div>
                   <div>📋 Experience: {p.has_organizing_experience ? 'Yes' : 'No'}</div>
+                  {p.extra_answers && Object.keys(p.extra_answers).length > 0 && formQuestions.map(q => {
+                    const ans = p.extra_answers[q.id];
+                    if (ans === undefined || ans === null || ans === '') return null;
+                    const display = ans === 'yes' ? 'نعم' : ans === 'no' ? 'لا' : ans;
+                    return <div key={q.id} style={{ direction:"rtl",textAlign:"right",marginTop:4,fontFamily:"'Tajawal',sans-serif" }}>❓ {q.label_ar} — <strong style={{ color:"#c0c0e0" }}>{display}</strong></div>;
+                  })}
                 </div>
               </div>
               {isAdmin && (
@@ -942,6 +1008,42 @@ function AdminApp() {
     );
   };
 
+  const renderQuestions = () => {
+    if (!isAdmin) return <div style={{ padding:16 }}><div style={{ ...S.card,textAlign:"center",padding:40,color:"#7a7a9e" }}><div style={{ fontSize:36,marginBottom:12 }}>🔒</div><div>Only admins can manage questions</div></div></div>;
+    return (
+      <div style={{ padding:16 }}>
+        <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16 }}>
+          <h2 style={{ margin:0,fontSize:18,fontWeight:700 }}>Registration Questions</h2>
+          <button style={S.btn(true)} onClick={()=>setModal("question")}><PlusIcon/> Add</button>
+        </div>
+        <div style={{ fontSize:12,color:"#7a7a9e",marginBottom:12,background:"rgba(108,99,255,0.06)",padding:"10px 14px",borderRadius:10 }}>
+          💡 These questions appear on every event's registration form, after the default fields. Changes apply to all future registrations.
+        </div>
+        {formQuestions.length === 0 ? (
+          <div style={{ ...S.card,textAlign:"center",padding:40,color:"#7a7a9e" }}>
+            <div style={{ fontSize:36,marginBottom:12 }}>❓</div><div>No custom questions yet.</div>
+          </div>
+        ) : formQuestions.map(q => (
+          <div key={q.id} style={S.card}>
+            <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8 }}>
+              <div style={{ flex:1,minWidth:0 }}>
+                <div style={{ fontSize:14,fontWeight:600,marginBottom:6,direction:"rtl",textAlign:"right",fontFamily:"'Tajawal',sans-serif" }}>{q.label_ar}</div>
+                <Badge color={q.field_type==='yes_no'?"#00d2ff":"#f0a500"}>{q.field_type === 'yes_no' ? 'نعم / لا' : 'Text input'}</Badge>
+              </div>
+              <div style={{ display:"flex",gap:4 }}>
+                <button style={{ ...S.btn(false),padding:"6px 10px",fontSize:11 }} onClick={()=>{
+                  const nv = prompt("Edit question text:", q.label_ar);
+                  if (nv !== null) updateQuestion(q.id, nv);
+                }}>Edit</button>
+                <button style={{ ...S.btn(false),padding:"6px 10px",color:"#ff5050" }} onClick={()=>deleteQuestion(q.id)}><TrashIcon/></button>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
   const renderModal = () => {
     if (eventQrModal) {
       const checkinUrl = `${window.location.origin}/checkin/${eventQrModal.barcode_id}`;
@@ -994,6 +1096,10 @@ function AdminApp() {
               <div style={{ flex:1 }}><label style={S.label}>Start Date</label><input id="ev-start" type="date" style={S.input}/></div>
               <div style={{ flex:1 }}><label style={S.label}>End Date</label><input id="ev-end" type="date" style={S.input}/></div>
             </div>
+            <div style={{ display:"flex",gap:10,marginBottom:14 }}>
+              <div style={{ flex:1 }}><label style={S.label}>Start Time</label><input id="ev-stime" type="time" style={S.input}/></div>
+              <div style={{ flex:1 }}><label style={S.label}>End Time</label><input id="ev-etime" type="time" style={S.input}/></div>
+            </div>
             <div style={{ marginBottom:14 }}><label style={S.label}>Location</label><input id="ev-loc" style={S.input}/></div>
             <div style={{ marginBottom:18 }}><label style={S.label}>Description</label><textarea id="ev-desc" style={{ ...S.input,minHeight:70,resize:"vertical" }}/></div>
             <div style={{ display:"flex",gap:8,justifyContent:"flex-end" }}>
@@ -1014,6 +1120,24 @@ function AdminApp() {
             <div style={{ display:"flex",gap:8,justifyContent:"flex-end" }}>
               <button style={S.btn(false)} onClick={()=>setModal(null)}>Cancel</button>
               <button style={S.btn(true)} onClick={createGroup}>Create</button>
+            </div>
+          </>)}
+          {modal === "question" && (<>
+            <h3 style={{ margin:"0 0 18px",fontSize:18,fontWeight:700 }}>Add Question</h3>
+            <div style={{ marginBottom:14 }}>
+              <label style={S.label}>Question Text (Arabic) *</label>
+              <input id="q-label" style={{ ...S.input,direction:"rtl",textAlign:"right",fontFamily:"'Tajawal',sans-serif" }} placeholder="اكتب السؤال هنا"/>
+            </div>
+            <div style={{ marginBottom:18 }}>
+              <label style={S.label}>Answer Type</label>
+              <select id="q-type" style={S.input} defaultValue="yes_no">
+                <option value="yes_no">Yes / No (نعم / لا)</option>
+                <option value="text">Text input</option>
+              </select>
+            </div>
+            <div style={{ display:"flex",gap:8,justifyContent:"flex-end" }}>
+              <button style={S.btn(false)} onClick={()=>setModal(null)}>Cancel</button>
+              <button style={S.btn(true)} onClick={addQuestion}>Add Question</button>
             </div>
           </>)}
         </div>
@@ -1037,12 +1161,15 @@ function AdminApp() {
         </div>
       </div>
       <div style={S.tabs}>
-        {TABS.map((t,i) => (
-          <button key={t} style={S.tab(tab===i)} onClick={()=>setTab(i)}>
-            {t}
-            {i === 1 && totalPending > 0 && <span style={{ marginLeft:6,background:"#f0a500",color:"#fff",borderRadius:10,padding:"1px 7px",fontSize:10,fontWeight:700 }}>{totalPending}</span>}
-          </button>
-        ))}
+        {TABS.map((t,i) => {
+          if (t === "Questions" && !isAdmin) return null;
+          return (
+            <button key={t} style={S.tab(tab===i)} onClick={()=>setTab(i)}>
+              {t}
+              {i === 1 && totalPending > 0 && <span style={{ marginLeft:6,background:"#f0a500",color:"#fff",borderRadius:10,padding:"1px 7px",fontSize:10,fontWeight:700 }}>{totalPending}</span>}
+            </button>
+          );
+        })}
       </div>
       {tab===0 && renderEvents()}
       {tab===1 && renderPending()}
@@ -1050,6 +1177,7 @@ function AdminApp() {
       {tab===3 && renderGroups()}
       {tab===4 && renderAttendance()}
       {tab===5 && renderReports()}
+      {tab===6 && renderQuestions()}
       {renderModal()}
     </div>
   );
