@@ -239,6 +239,12 @@ function RegistrationForm({ eventCode }) {
                   <div style={R.radio(extraAnswers[q.id]==='yes')} onClick={()=>setExtraAnswers(a=>({...a,[q.id]:'yes'}))}>نعم</div>
                   <div style={R.radio(extraAnswers[q.id]==='no')} onClick={()=>setExtraAnswers(a=>({...a,[q.id]:'no'}))}>لا</div>
                 </div>
+              ) : q.field_type === 'multiple_choice' ? (
+                <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
+                  {(q.options || []).map((opt,i) => (
+                    <div key={i} style={R.radio(extraAnswers[q.id]===opt)} onClick={()=>setExtraAnswers(a=>({...a,[q.id]:opt}))}>{opt}</div>
+                  ))}
+                </div>
               ) : (
                 <input style={R.input} value={extraAnswers[q.id] || ''} onChange={e=>setExtraAnswers(a=>({...a,[q.id]:e.target.value}))}/>
               )}
@@ -450,6 +456,7 @@ function AdminApp() {
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState(0);
   const [modal, setModal] = useState(null);
+  const [questionDraft, setQuestionDraft] = useState(null);
   const [events, setEvents] = useState([]);
   const [participants, setParticipants] = useState([]);
   const [groups, setGroups] = useState([]);
@@ -658,29 +665,56 @@ function AdminApp() {
   };
 
   // ─── DYNAMIC QUESTIONS CRUD (admin only) ───
-  const addQuestion = async () => {
-    const label = document.getElementById('q-label')?.value?.trim();
-    const ftype = document.getElementById('q-type')?.value;
-    if (!label) return;
-    const { data } = await supabase.from('form_questions').insert({
-      label_ar: label,
-      field_type: ftype,
-      is_required: true,
-      order_index: formQuestions.length + 1,
-    }).select().single();
-    if (data) { setFormQuestions(prev => [...prev, data]); setModal(null); }
+  const openAddQuestion = () => {
+    setQuestionDraft({ id: null, label_ar: "", field_type: "yes_no", is_required: true, options: [] });
+    setModal("question");
+  };
+
+  const openEditQuestion = (q) => {
+    setQuestionDraft({
+      id: q.id,
+      label_ar: q.label_ar || "",
+      field_type: q.field_type || "text",
+      is_required: !!q.is_required,
+      options: Array.isArray(q.options) ? q.options : [],
+    });
+    setModal("question");
+  };
+
+  const saveQuestion = async () => {
+    const d = questionDraft;
+    if (!d || !d.label_ar.trim()) return;
+    const cleanOptions = d.field_type === 'multiple_choice'
+      ? d.options.map(o => (o || "").trim()).filter(Boolean)
+      : [];
+    if (d.field_type === 'multiple_choice' && cleanOptions.length < 2) {
+      alert("Please add at least 2 options for a multiple choice question.");
+      return;
+    }
+    const payload = {
+      label_ar: d.label_ar.trim(),
+      field_type: d.field_type,
+      is_required: d.is_required,
+      options: cleanOptions,
+    };
+    if (d.id) {
+      await supabase.from('form_questions').update(payload).eq('id', d.id);
+      setFormQuestions(prev => prev.map(q => q.id === d.id ? { ...q, ...payload } : q));
+    } else {
+      const { data } = await supabase.from('form_questions').insert({
+        ...payload,
+        order_index: formQuestions.length + 1,
+      }).select().single();
+      if (data) setFormQuestions(prev => [...prev, data]);
+    }
+    setModal(null);
+    setQuestionDraft(null);
   };
 
   const deleteQuestion = async (id) => {
     if (!confirm("Delete this question? Existing answers will be kept.")) return;
     await supabase.from('form_questions').delete().eq('id', id);
     setFormQuestions(prev => prev.filter(q => q.id !== id));
-  };
-
-  const updateQuestion = async (id, newLabel) => {
-    if (!newLabel?.trim()) return;
-    await supabase.from('form_questions').update({ label_ar: newLabel.trim() }).eq('id', id);
-    setFormQuestions(prev => prev.map(q => q.id === id ? { ...q, label_ar: newLabel.trim() } : q));
   };
 
   const currentEvent = events.find(e => e.id === selectedEvent);
@@ -1015,7 +1049,7 @@ function AdminApp() {
       <div style={{ padding:16 }}>
         <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16 }}>
           <h2 style={{ margin:0,fontSize:18,fontWeight:700 }}>Registration Questions</h2>
-          <button style={S.btn(true)} onClick={()=>setModal("question")}><PlusIcon/> Add</button>
+          <button style={S.btn(true)} onClick={openAddQuestion}><PlusIcon/> Add</button>
         </div>
         <div style={{ fontSize:12,color:"#7a7a9e",marginBottom:12,background:"rgba(108,99,255,0.06)",padding:"10px 14px",borderRadius:10 }}>
           💡 These questions appear on every event's registration form, after the default fields. Changes apply to all future registrations.
@@ -1029,13 +1063,20 @@ function AdminApp() {
             <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8 }}>
               <div style={{ flex:1,minWidth:0 }}>
                 <div style={{ fontSize:14,fontWeight:600,marginBottom:6,direction:"rtl",textAlign:"right",fontFamily:"'Tajawal',sans-serif" }}>{q.label_ar}</div>
-                <Badge color={q.field_type==='yes_no'?"#00d2ff":"#f0a500"}>{q.field_type === 'yes_no' ? 'نعم / لا' : 'Text input'}</Badge>
+                <div style={{ display:"flex",gap:6,flexWrap:"wrap" }}>
+                  <Badge color={q.field_type==='yes_no'?"#00d2ff":q.field_type==='multiple_choice'?"#a855f7":"#f0a500"}>
+                    {q.field_type === 'yes_no' ? 'نعم / لا' : q.field_type === 'multiple_choice' ? 'Multiple choice' : 'Text input'}
+                  </Badge>
+                  <Badge color={q.is_required?"#ff5050":"#7a7a9e"}>{q.is_required ? 'Required' : 'Optional'}</Badge>
+                </div>
+                {q.field_type === 'multiple_choice' && Array.isArray(q.options) && q.options.length > 0 && (
+                  <div style={{ marginTop:8,fontSize:12,color:"#a0a0c0",direction:"rtl",textAlign:"right",fontFamily:"'Tajawal',sans-serif" }}>
+                    {q.options.map((o,i) => <div key={i}>• {o}</div>)}
+                  </div>
+                )}
               </div>
               <div style={{ display:"flex",gap:4 }}>
-                <button style={{ ...S.btn(false),padding:"6px 10px",fontSize:11 }} onClick={()=>{
-                  const nv = prompt("Edit question text:", q.label_ar);
-                  if (nv !== null) updateQuestion(q.id, nv);
-                }}>Edit</button>
+                <button style={{ ...S.btn(false),padding:"6px 10px",fontSize:11 }} onClick={()=>openEditQuestion(q)}>Edit</button>
                 <button style={{ ...S.btn(false),padding:"6px 10px",color:"#ff5050" }} onClick={()=>deleteQuestion(q.id)}><TrashIcon/></button>
               </div>
             </div>
@@ -1123,22 +1164,52 @@ function AdminApp() {
               <button style={S.btn(true)} onClick={createGroup}>Create</button>
             </div>
           </>)}
-          {modal === "question" && (<>
-            <h3 style={{ margin:"0 0 18px",fontSize:18,fontWeight:700 }}>Add Question</h3>
+          {modal === "question" && questionDraft && (<>
+            <h3 style={{ margin:"0 0 18px",fontSize:18,fontWeight:700 }}>{questionDraft.id ? 'Edit Question' : 'Add Question'}</h3>
             <div style={{ marginBottom:14 }}>
               <label style={S.label}>Question Text (Arabic) *</label>
-              <input id="q-label" style={{ ...S.input,direction:"rtl",textAlign:"right",fontFamily:"'Tajawal',sans-serif" }} placeholder="اكتب السؤال هنا"/>
+              <input style={{ ...S.input,direction:"rtl",textAlign:"right",fontFamily:"'Tajawal',sans-serif" }} placeholder="اكتب السؤال هنا"
+                value={questionDraft.label_ar}
+                onChange={e=>setQuestionDraft(d=>({...d,label_ar:e.target.value}))}/>
             </div>
-            <div style={{ marginBottom:18 }}>
+            <div style={{ marginBottom:14 }}>
               <label style={S.label}>Answer Type</label>
-              <select id="q-type" style={S.input} defaultValue="yes_no">
+              <select style={S.input} value={questionDraft.field_type}
+                onChange={e=>setQuestionDraft(d=>({...d,field_type:e.target.value}))}>
                 <option value="yes_no">Yes / No (نعم / لا)</option>
                 <option value="text">Text input</option>
+                <option value="multiple_choice">Multiple choice</option>
               </select>
             </div>
+            {questionDraft.field_type === 'multiple_choice' && (
+              <div style={{ marginBottom:14 }}>
+                <label style={S.label}>Options (Arabic)</label>
+                {questionDraft.options.map((opt,i) => (
+                  <div key={i} style={{ display:"flex",gap:6,marginBottom:6 }}>
+                    <input style={{ ...S.input,direction:"rtl",textAlign:"right",fontFamily:"'Tajawal',sans-serif" }}
+                      placeholder={`الخيار ${i+1}`}
+                      value={opt}
+                      onChange={e=>setQuestionDraft(d=>{ const o=[...d.options]; o[i]=e.target.value; return {...d,options:o}; })}/>
+                    <button style={{ ...S.btn(false),padding:"6px 10px",color:"#ff5050" }}
+                      onClick={()=>setQuestionDraft(d=>({...d,options:d.options.filter((_,j)=>j!==i)}))}><TrashIcon/></button>
+                  </div>
+                ))}
+                <button style={{ ...S.btn(false),padding:"6px 12px",fontSize:12 }}
+                  onClick={()=>setQuestionDraft(d=>({...d,options:[...d.options,""]}))}>+ Add option</button>
+              </div>
+            )}
+            <div style={{ marginBottom:18 }}>
+              <div style={{ display:"flex",alignItems:"center",gap:10,cursor:"pointer" }}
+                onClick={()=>setQuestionDraft(d=>({...d,is_required:!d.is_required}))}>
+                <div style={{ width:22,height:22,borderRadius:6,border:`2px solid ${questionDraft.is_required?"#00d278":"#6c63ff"}`,display:"flex",alignItems:"center",justifyContent:"center",background:questionDraft.is_required?"#00d278":"transparent",flexShrink:0 }}>
+                  {questionDraft.is_required && <CheckIcon/>}
+                </div>
+                <span style={{ fontSize:13 }}>Required (mandatory to answer)</span>
+              </div>
+            </div>
             <div style={{ display:"flex",gap:8,justifyContent:"flex-end" }}>
-              <button style={S.btn(false)} onClick={()=>setModal(null)}>Cancel</button>
-              <button style={S.btn(true)} onClick={addQuestion}>Add Question</button>
+              <button style={S.btn(false)} onClick={()=>{setModal(null);setQuestionDraft(null);}}>Cancel</button>
+              <button style={S.btn(true)} onClick={saveQuestion}>{questionDraft.id ? 'Save' : 'Add Question'}</button>
             </div>
           </>)}
         </div>
