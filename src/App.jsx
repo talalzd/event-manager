@@ -210,7 +210,7 @@ function RegistrationForm({ eventCode }) {
           </div>
 
           <div style={R.field}>
-            <label style={R.label}>الإيميل الجامعي *</label>
+            <label style={R.label}>البريد الإلكتروني *</label>
             <input style={R.input} type="email" value={form.university_email} onChange={e=>update('university_email',e.target.value)} dir="ltr"/>
           </div>
 
