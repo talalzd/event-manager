@@ -23,7 +23,7 @@ const Badge = ({ children, color = "#6c63ff" }) => (
   <span style={{ display:"inline-flex",alignItems:"center",gap:4,padding:"2px 10px",borderRadius:20,fontSize:11,fontWeight:600,background:color+"18",color,letterSpacing:0.3 }}>{children}</span>
 );
 
-const TABS = ["Events", "Pending", "Participants", "Groups", "Attendance", "Reports", "Questions"];
+const TABS = ["Events", "Pending", "Participants", "Groups", "Attendance", "Reports", "Questions", "Pledges"];
 
 const S = {
   app: { minHeight:"100vh", background:"linear-gradient(145deg,#0d0d1a 0%,#1a1a2e 40%,#16213e 100%)", fontFamily:"'Outfit','Segoe UI',sans-serif", color:"#e0e0f0" },
@@ -43,6 +43,57 @@ const S = {
   statLabel: { fontSize:10,color:"#7a7a9e",marginTop:4,textTransform:"uppercase",letterSpacing:0.8 },
 };
 
+// ═══ DESCRIPTION RENDERER — turns `-` / `•` lines into bullets, blank lines into paragraph breaks ═══
+function DescriptionRenderer({ text, style }) {
+  if (!text) return null;
+  const lines = text.split('\n');
+  const blocks = [];
+  let list = null;
+  let para = [];
+  const flushPara = () => { if (para.length) { blocks.push({ type:'p', content: para.join(' ') }); para = []; } };
+  const flushList = () => { if (list && list.length) { blocks.push({ type:'ul', items: list }); } list = null; };
+  for (const line of lines) {
+    const t = line.trim();
+    const bullet = t.match(/^[-•*]\s*(.+)/);
+    if (bullet) { flushPara(); if (!list) list = []; list.push(bullet[1]); }
+    else if (t === '') { flushPara(); flushList(); }
+    else { flushList(); para.push(t); }
+  }
+  flushPara(); flushList();
+  return (
+    <div style={style}>
+      {blocks.map((b, i) =>
+        b.type === 'ul'
+          ? <ul key={i} style={{ margin:"6px 0", paddingInlineStart:22, listStyle:"disc" }}>
+              {b.items.map((item, j) => <li key={j} style={{ marginBottom:4 }}>{item}</li>)}
+            </ul>
+          : <p key={i} style={{ margin:"6px 0" }}>{b.content}</p>
+      )}
+    </div>
+  );
+}
+
+// ═══ SHARED PARTICIPANT DETAILS BLOCK (used by Pending + Participants tabs) ═══
+function ParticipantDetails({ p, questions }) {
+  return (
+    <div style={{ fontSize:12,color:"#9999b5",lineHeight:1.8 }}>
+      <div>📱 {p.phone}</div>
+      <div>✉️ {p.university_email}</div>
+      <div>🆔 {p.national_id_type === 'national' ? 'National ID' : 'Iqama'}: <span style={{ fontFamily:"monospace" }}>{p.national_id}</span></div>
+      <div>🎓 Univ ID: <span style={{ fontFamily:"monospace" }}>{p.university_id}</span></div>
+      <div>👤 {p.gender === 'male' ? 'Male' : 'Female'}</div>
+      <div>🤝 Volunteer unit: {p.is_volunteer_member ? 'Yes' : 'No'}</div>
+      <div>📋 Experience: {p.has_organizing_experience ? 'Yes' : 'No'}</div>
+      {p.extra_answers && Object.keys(p.extra_answers || {}).length > 0 && questions.map(q => {
+        const ans = p.extra_answers[q.id];
+        if (ans === undefined || ans === null || ans === '') return null;
+        const display = ans === 'yes' ? 'نعم' : ans === 'no' ? 'لا' : ans;
+        return <div key={q.id} style={{ direction:"rtl",textAlign:"right",marginTop:4,fontFamily:"'Tajawal',sans-serif" }}>❓ {q.label_ar} — <strong style={{ color:"#c0c0e0" }}>{display}</strong></div>;
+      })}
+    </div>
+  );
+}
+
 // ═══ PUBLIC REGISTRATION FORM (Arabic RTL) ═══
 function RegistrationForm({ eventCode }) {
   const [event, setEvent] = useState(null);
@@ -51,23 +102,26 @@ function RegistrationForm({ eventCode }) {
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState("");
   const [questions, setQuestions] = useState([]);
+  const [pledges, setPledges] = useState([]);
   const [extraAnswers, setExtraAnswers] = useState({});
+  const [pledgeAcceptances, setPledgeAcceptances] = useState({});
   const [form, setForm] = useState({
     full_name: "", gender: "", phone: "",
     national_id_type: "", national_id: "",
     university_id: "", university_email: "",
     is_volunteer_member: "", has_organizing_experience: "",
-    pledge_attendance: false, pledge_guidelines: false,
   });
 
   useEffect(() => {
     (async () => {
-      const [ev, qs] = await Promise.all([
+      const [ev, qs, pl] = await Promise.all([
         supabase.from('events').select('*').eq('barcode_id', eventCode).maybeSingle(),
         supabase.from('form_questions').select('*').order('order_index', { ascending: true }),
+        supabase.from('pledges').select('*').order('order_index', { ascending: true }),
       ]);
       setEvent(ev.data);
       setQuestions(qs.data || []);
+      setPledges(pl.data || []);
       setLoading(false);
     })();
   }, [eventCode]);
@@ -80,36 +134,44 @@ function RegistrationForm({ eventCode }) {
     for (const k of required) {
       if (!form[k]) { setError("جميع الحقول مطلوبة"); return; }
     }
-    // Validate dynamic questions
     for (const q of questions) {
       if (q.is_required && !extraAnswers[q.id]) {
         setError("جميع الحقول مطلوبة"); return;
       }
     }
-    if (!form.pledge_attendance || !form.pledge_guidelines) {
-      setError("يجب الموافقة على التعهدات"); return;
+    for (const p of pledges) {
+      if (!pledgeAcceptances[p.id]) {
+        setError("يجب الموافقة على جميع التعهدات"); return;
+      }
     }
     setSubmitting(true);
-    const { error: e } = await supabase.from('participants').insert({
-      event_id: event.id,
-      full_name: form.full_name,
-      email: form.university_email,
-      phone: form.phone,
-      gender: form.gender,
-      national_id_type: form.national_id_type,
-      national_id: form.national_id,
-      university_id: form.university_id,
-      university_email: form.university_email,
-      is_volunteer_member: form.is_volunteer_member === 'yes',
-      has_organizing_experience: form.has_organizing_experience === 'yes',
-      pledge_attendance: form.pledge_attendance,
-      pledge_guidelines: form.pledge_guidelines,
-      extra_answers: extraAnswers,
-      status: 'pending',
-      is_leader: false,
+    const { data, error: rpcErr } = await supabase.rpc('register_participant', {
+      p_event_code: eventCode,
+      p_full_name: form.full_name,
+      p_email: form.university_email,
+      p_phone: form.phone,
+      p_gender: form.gender,
+      p_national_id_type: form.national_id_type,
+      p_national_id: form.national_id,
+      p_university_id: form.university_id,
+      p_university_email: form.university_email,
+      p_is_volunteer_member: form.is_volunteer_member === 'yes',
+      p_has_organizing_experience: form.has_organizing_experience === 'yes',
+      p_pledge_acceptances: pledgeAcceptances,
+      p_extra_answers: extraAnswers,
     });
     setSubmitting(false);
-    if (e) { setError(e.message); return; }
+    if (rpcErr) { setError(rpcErr.message); return; }
+    if (!data?.success) {
+      if (data?.error === 'duplicate') {
+        setError("أنت مسجّل مسبقاً في هذه الفعالية. لا يمكن التسجيل أكثر من مرة.");
+      } else if (data?.error === 'event_not_found') {
+        setError("الفعالية غير موجودة");
+      } else {
+        setError("حدث خطأ أثناء التسجيل. حاول مرة أخرى.");
+      }
+      return;
+    }
     setSubmitted(true);
   };
 
@@ -163,7 +225,12 @@ function RegistrationForm({ eventCode }) {
         <div style={{ marginBottom:20,textAlign:"center" }}>
           <h1 style={R.title}>التسجيل في الفعالية</h1>
           <div style={{ color:"#c0c0e0",fontSize:18,fontWeight:600,marginTop:8 }}>{event.name}</div>
-          {event.description && <div style={{ color:"#a0a0c0",fontSize:14,marginTop:10,lineHeight:1.7,padding:"12px 16px",background:"rgba(108,99,255,0.06)",borderRadius:10,textAlign:"right" }}>{event.description}</div>}
+          {event.description && (
+            <DescriptionRenderer
+              text={event.description}
+              style={{ color:"#a0a0c0",fontSize:14,marginTop:10,lineHeight:1.7,padding:"12px 16px",background:"rgba(108,99,255,0.06)",borderRadius:10,textAlign:"right" }}
+            />
+          )}
           <div style={{ color:"#7a7a9e",fontSize:13,marginTop:10,display:"flex",flexDirection:"column",gap:4 }}>
             {event.start_date && <div>📅 {new Date(event.start_date + 'T00:00:00').toLocaleDateString('ar-SA')}{event.end_date && event.end_date !== event.start_date && ` - ${new Date(event.end_date + 'T00:00:00').toLocaleDateString('ar-SA')}`}</div>}
             {(event.start_time || event.end_time) && <div>🕐 {event.start_time?.slice(0,5) || ''}{event.end_time && ` - ${event.end_time.slice(0,5)}`}</div>}
@@ -251,23 +318,25 @@ function RegistrationForm({ eventCode }) {
             </div>
           ))}
 
-          <div style={R.field}>
-            <label style={R.label}>التعهدات *</label>
-            <div style={{ display:"flex",flexDirection:"column",gap:10 }}>
-              <div style={R.check(form.pledge_attendance)} onClick={()=>update('pledge_attendance',!form.pledge_attendance)}>
-                <div style={{ width:22,height:22,borderRadius:6,border:`2px solid ${form.pledge_attendance?"#00d278":"#6c63ff"}`,display:"flex",alignItems:"center",justifyContent:"center",background:form.pledge_attendance?"#00d278":"transparent",flexShrink:0 }}>
-                  {form.pledge_attendance && <CheckIcon/>}
-                </div>
-                <span style={{ fontSize:13,lineHeight:1.6 }}>أتعهد بالالتزام والحضور في الوقت المذكور أعلاه</span>
-              </div>
-              <div style={R.check(form.pledge_guidelines)} onClick={()=>update('pledge_guidelines',!form.pledge_guidelines)}>
-                <div style={{ width:22,height:22,borderRadius:6,border:`2px solid ${form.pledge_guidelines?"#00d278":"#6c63ff"}`,display:"flex",alignItems:"center",justifyContent:"center",background:form.pledge_guidelines?"#00d278":"transparent",flexShrink:0 }}>
-                  {form.pledge_guidelines && <CheckIcon/>}
-                </div>
-                <span style={{ fontSize:13,lineHeight:1.6 }}>أتعهد بالإلتزام بجميع التعليمات الموجهة لي من قِبل المشرفين، مما يساهم في تسهيل العمل والظهور بشكل لائق</span>
+          {/* Dynamic admin-managed pledges */}
+          {pledges.length > 0 && (
+            <div style={R.field}>
+              <label style={R.label}>التعهدات *</label>
+              <div style={{ display:"flex",flexDirection:"column",gap:10 }}>
+                {pledges.map(pl => {
+                  const sel = !!pledgeAcceptances[pl.id];
+                  return (
+                    <div key={pl.id} style={R.check(sel)} onClick={()=>setPledgeAcceptances(a=>({...a,[pl.id]:!a[pl.id]}))}>
+                      <div style={{ width:22,height:22,borderRadius:6,border:`2px solid ${sel?"#00d278":"#6c63ff"}`,display:"flex",alignItems:"center",justifyContent:"center",background:sel?"#00d278":"transparent",flexShrink:0 }}>
+                        {sel && <CheckIcon/>}
+                      </div>
+                      <span style={{ fontSize:13,lineHeight:1.6 }}>{pl.label_ar}</span>
+                    </div>
+                  );
+                })}
               </div>
             </div>
-          </div>
+          )}
 
           {error && <div style={{ color:"#ff5050",fontSize:13,marginBottom:14,padding:"10px 14px",background:"rgba(255,80,80,0.1)",borderRadius:8,textAlign:"center" }}>{error}</div>}
 
@@ -391,7 +460,7 @@ function AuthScreen({ onAuth }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
-  const [role, setRole] = useState("leader");
+  const [role] = useState("leader");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -457,11 +526,13 @@ function AdminApp() {
   const [tab, setTab] = useState(0);
   const [modal, setModal] = useState(null);
   const [questionDraft, setQuestionDraft] = useState(null);
+  const [pledgeDraft, setPledgeDraft] = useState(null);
   const [events, setEvents] = useState([]);
   const [participants, setParticipants] = useState([]);
   const [groups, setGroups] = useState([]);
   const [attendance, setAttendance] = useState([]);
   const [formQuestions, setFormQuestions] = useState([]);
+  const [pledgesList, setPledgesList] = useState([]);
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [scanMode, setScanMode] = useState(false);
   const [scanInput, setScanInput] = useState("");
@@ -469,6 +540,7 @@ function AdminApp() {
   const [searchTerm, setSearchTerm] = useState("");
   const [qrModal, setQrModal] = useState(null);
   const [eventQrModal, setEventQrModal] = useState(null);
+  const [expandedParticipant, setExpandedParticipant] = useState(null);
   const scanRef = useRef(null);
 
   useEffect(() => {
@@ -491,18 +563,20 @@ function AdminApp() {
   useEffect(() => { if (user) loadAllData(); }, [user]);
 
   const loadAllData = async () => {
-    const [ev, pa, gr, at, fq] = await Promise.all([
+    const [ev, pa, gr, at, fq, pl] = await Promise.all([
       supabase.from('events').select('*').order('created_at', { ascending: false }),
       supabase.from('participants').select('*').order('created_at', { ascending: true }),
       supabase.from('groups').select('*').order('created_at', { ascending: true }),
       supabase.from('attendance').select('*'),
       supabase.from('form_questions').select('*').order('order_index', { ascending: true }),
+      supabase.from('pledges').select('*').order('order_index', { ascending: true }),
     ]);
     if (ev.data) setEvents(ev.data);
     if (pa.data) setParticipants(pa.data);
     if (gr.data) setGroups(gr.data);
     if (at.data) setAttendance(at.data);
     if (fq.data) setFormQuestions(fq.data);
+    if (pl.data) setPledgesList(pl.data);
   };
 
   useEffect(() => {
@@ -582,6 +656,14 @@ function AdminApp() {
     setParticipants(prev => prev.filter(p => p.id !== id));
   };
 
+  const toggleNoShow = async (p) => {
+    const newVal = !p.is_no_show;
+    const msg = newVal ? "Mark this participant as a no-show?" : "Clear the no-show status for this participant?";
+    if (!confirm(msg)) return;
+    await supabase.from('participants').update({ is_no_show: newVal }).eq('id', p.id);
+    setParticipants(prev => prev.map(x => x.id === p.id ? { ...x, is_no_show: newVal } : x));
+  };
+
   const toggleLeader = async (p) => {
     await supabase.from('participants').update({ is_leader: !p.is_leader }).eq('id', p.id);
     setParticipants(prev => prev.map(x => x.id === p.id ? { ...x, is_leader: !x.is_leader } : x));
@@ -597,6 +679,17 @@ function AdminApp() {
       leader_id: leaderId ? Number(leaderId) : null,
     }).select().single();
     if (data) { setGroups(prev => [...prev, data]); setModal(null); }
+  };
+
+  const deleteGroup = async (g) => {
+    if (!confirm(`Delete group "${g.name}"? Members will become unassigned (but won't be deleted).`)) return;
+    // Unassign all members first
+    await supabase.from('participants').update({ group_id: null }).eq('group_id', g.id);
+    // Then delete the group
+    const { error } = await supabase.from('groups').delete().eq('id', g.id);
+    if (error) { alert(error.message); return; }
+    setParticipants(prev => prev.map(p => p.group_id === g.id ? { ...p, group_id: null } : p));
+    setGroups(prev => prev.filter(x => x.id !== g.id));
   };
 
   const autoAssignGroups = async () => {
@@ -717,6 +810,43 @@ function AdminApp() {
     setFormQuestions(prev => prev.filter(q => q.id !== id));
   };
 
+  // ─── PLEDGES CRUD (admin only) ───
+  const openAddPledge = () => {
+    setPledgeDraft({ id: null, label_ar: "" });
+    setModal("pledge");
+  };
+
+  const openEditPledge = (pl) => {
+    setPledgeDraft({ id: pl.id, label_ar: pl.label_ar || "" });
+    setModal("pledge");
+  };
+
+  const savePledge = async () => {
+    const d = pledgeDraft;
+    if (!d || !d.label_ar.trim()) return;
+    const payload = { label_ar: d.label_ar.trim() };
+    if (d.id) {
+      await supabase.from('pledges').update(payload).eq('id', d.id);
+      setPledgesList(prev => prev.map(p => p.id === d.id ? { ...p, ...payload } : p));
+    } else {
+      const { data, error } = await supabase.from('pledges').insert({
+        ...payload,
+        order_index: pledgesList.length + 1,
+      }).select().single();
+      if (error) { alert(error.message); return; }
+      if (data) setPledgesList(prev => [...prev, data]);
+    }
+    setModal(null);
+    setPledgeDraft(null);
+  };
+
+  const deletePledge = async (id) => {
+    if (!confirm("Delete this pledge? It will be removed from the registration form for new signups.")) return;
+    const { error } = await supabase.from('pledges').delete().eq('id', id);
+    if (error) { alert(error.message); return; }
+    setPledgesList(prev => prev.filter(p => p.id !== id));
+  };
+
   const currentEvent = events.find(e => e.id === selectedEvent);
   const eventParticipants = participants.filter(p => p.event_id === selectedEvent);
   const eventPending = eventParticipants.filter(p => p.status === 'pending');
@@ -724,6 +854,7 @@ function AdminApp() {
   const eventGroups = groups.filter(g => g.event_id === selectedEvent);
   const eventAttendance = attendance.filter(a => a.event_id === selectedEvent);
   const presentCount = eventAttendance.filter(a => a.checked_in).length;
+  const noShowCount = eventApproved.filter(p => p.is_no_show).length;
   const filtered = eventApproved.filter(p =>
     p.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
     (p.barcode_id || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -753,13 +884,14 @@ function AdminApp() {
     const rate = total > 0 ? Math.round(present / total * 100) : 0;
     const rows = eventApproved.map(p => {
       const att = eventAttendance.find(a => a.participant_id === p.id);
+      const status = p.is_no_show ? '<span style="color:#f0a500">⚠️ No Show</span>' : (att?.checked_in ? '<span style="color:green">✓ Present</span>' : '<span style="color:red">✗ Absent</span>');
       return `<tr>
         <td style="padding:6px 8px;border:1px solid #ddd">${p.full_name}</td>
         <td style="padding:6px 8px;border:1px solid #ddd">${p.national_id || '—'}</td>
         <td style="padding:6px 8px;border:1px solid #ddd">${p.university_id || '—'}</td>
         <td style="padding:6px 8px;border:1px solid #ddd">${p.phone || '—'}</td>
         <td style="padding:6px 8px;border:1px solid #ddd">${p.barcode_id}</td>
-        <td style="padding:6px 8px;border:1px solid #ddd;color:${att?.checked_in?'green':'red'}">${att?.checked_in?'✓ Present':'✗ Absent'}</td>
+        <td style="padding:6px 8px;border:1px solid #ddd">${status}</td>
         <td style="padding:6px 8px;border:1px solid #ddd">${att?.check_in_time?new Date(att.check_in_time).toLocaleTimeString():'—'}</td>
       </tr>`;
     }).join('');
@@ -769,11 +901,12 @@ function AdminApp() {
         <h1 style="margin:0">${currentEvent.name}</h1>
         <p style="color:#666">Event Report — ${new Date().toLocaleDateString()}</p>
       </div>
-      <div style="display:flex;gap:20px;margin-bottom:24px">
-        <div style="flex:1;text-align:center;padding:20px;background:#f0f0ff;border-radius:10px"><div style="font-size:32px;font-weight:800;color:#6c63ff">${total}</div><div>Total</div></div>
-        <div style="flex:1;text-align:center;padding:20px;background:#e8fff0;border-radius:10px"><div style="font-size:32px;font-weight:800;color:#00b868">${present}</div><div>Present</div></div>
-        <div style="flex:1;text-align:center;padding:20px;background:#fff0f0;border-radius:10px"><div style="font-size:32px;font-weight:800;color:#ff5050">${total-present}</div><div>Absent</div></div>
-        <div style="flex:1;text-align:center;padding:20px;background:#f0f0ff;border-radius:10px"><div style="font-size:32px;font-weight:800;color:#6c63ff">${rate}%</div><div>Rate</div></div>
+      <div style="display:flex;gap:20px;margin-bottom:24px;flex-wrap:wrap">
+        <div style="flex:1;min-width:140px;text-align:center;padding:20px;background:#f0f0ff;border-radius:10px"><div style="font-size:32px;font-weight:800;color:#6c63ff">${total}</div><div>Total</div></div>
+        <div style="flex:1;min-width:140px;text-align:center;padding:20px;background:#e8fff0;border-radius:10px"><div style="font-size:32px;font-weight:800;color:#00b868">${present}</div><div>Present</div></div>
+        <div style="flex:1;min-width:140px;text-align:center;padding:20px;background:#fff0f0;border-radius:10px"><div style="font-size:32px;font-weight:800;color:#ff5050">${total-present-noShowCount}</div><div>Absent</div></div>
+        <div style="flex:1;min-width:140px;text-align:center;padding:20px;background:#fff7e6;border-radius:10px"><div style="font-size:32px;font-weight:800;color:#f0a500">${noShowCount}</div><div>No Show</div></div>
+        <div style="flex:1;min-width:140px;text-align:center;padding:20px;background:#f0f0ff;border-radius:10px"><div style="font-size:32px;font-weight:800;color:#6c63ff">${rate}%</div><div>Rate</div></div>
       </div>
       <h2>Attendance</h2>
       <table style="width:100%;border-collapse:collapse">
@@ -850,21 +983,7 @@ function AdminApp() {
             <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10 }}>
               <div style={{ flex:1,minWidth:0 }}>
                 <div style={{ fontSize:15,fontWeight:700,marginBottom:8 }}>{p.full_name}</div>
-                <div style={{ fontSize:12,color:"#9999b5",lineHeight:1.8 }}>
-                  <div>📱 {p.phone}</div>
-                  <div>✉️ {p.university_email}</div>
-                  <div>🆔 {p.national_id_type === 'national' ? 'National ID' : 'Iqama'}: <span style={{ fontFamily:"monospace" }}>{p.national_id}</span></div>
-                  <div>🎓 Univ ID: <span style={{ fontFamily:"monospace" }}>{p.university_id}</span></div>
-                  <div>👤 {p.gender === 'male' ? 'Male' : 'Female'}</div>
-                  <div>🤝 Volunteer unit: {p.is_volunteer_member ? 'Yes' : 'No'}</div>
-                  <div>📋 Experience: {p.has_organizing_experience ? 'Yes' : 'No'}</div>
-                  {p.extra_answers && Object.keys(p.extra_answers).length > 0 && formQuestions.map(q => {
-                    const ans = p.extra_answers[q.id];
-                    if (ans === undefined || ans === null || ans === '') return null;
-                    const display = ans === 'yes' ? 'نعم' : ans === 'no' ? 'لا' : ans;
-                    return <div key={q.id} style={{ direction:"rtl",textAlign:"right",marginTop:4,fontFamily:"'Tajawal',sans-serif" }}>❓ {q.label_ar} — <strong style={{ color:"#c0c0e0" }}>{display}</strong></div>;
-                  })}
-                </div>
+                <ParticipantDetails p={p} questions={formQuestions}/>
               </div>
               {isAdmin && (
                 <div style={{ display:"flex",flexDirection:"column",gap:6,flexShrink:0 }}>
@@ -885,37 +1004,48 @@ function AdminApp() {
       <div style={{ padding:16 }}>
         <div style={{ fontSize:12,color:"#7a7a9e",marginBottom:8 }}>Event: <strong style={{ color:"#e0e0f0" }}>{currentEvent?.name}</strong></div>
         <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8 }}>
-          <h2 style={{ margin:0,fontSize:18,fontWeight:700 }}>Approved <span style={{ color:"#6c63ff",fontSize:14 }}>({eventApproved.length})</span></h2>
+          <h2 style={{ margin:0,fontSize:18,fontWeight:700 }}>Approved <span style={{ color:"#6c63ff",fontSize:14 }}>({eventApproved.length})</span>{noShowCount > 0 && <span style={{ color:"#f0a500",fontSize:14,marginLeft:8 }}>({noShowCount} no-show)</span>}</h2>
           {eventApproved.length > 0 && <button style={S.btn(false)} onClick={printQRCodes}>🖨️ Print QRs</button>}
         </div>
         <input type="text" placeholder="Search..." value={searchTerm} onChange={e=>setSearchTerm(e.target.value)} style={{ ...S.input,marginBottom:12 }}/>
         {eventApproved.length === 0 ? (
           <div style={{ ...S.card,textAlign:"center",padding:40,color:"#7a7a9e" }}><div style={{ fontSize:36,marginBottom:12 }}>👥</div><div>No approved participants yet.</div></div>
         ) : (
-          <div style={{ maxHeight:"65vh",overflowY:"auto" }}>
-            {filtered.map(p => (
-              <div key={p.id} style={{ ...S.card,padding:12 }}>
-                <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",gap:8 }}>
-                  <div style={{ flex:1,minWidth:0 }}>
-                    <div style={{ display:"flex",alignItems:"center",gap:8,flexWrap:"wrap" }}>
-                      <span style={{ fontSize:14,fontWeight:600 }}>{p.full_name}</span>
-                      {p.is_leader && <Badge color="#f0a500">⭐ Leader</Badge>}
+          <div style={{ maxHeight:"70vh",overflowY:"auto" }}>
+            {filtered.map(p => {
+              const isOpen = expandedParticipant === p.id;
+              return (
+                <div key={p.id} style={{ ...S.card,padding:14,opacity:p.is_no_show?0.55:1,borderColor:p.is_no_show?"rgba(240,165,0,0.3)":undefined }}>
+                  <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8 }}>
+                    <div style={{ flex:1,minWidth:0,cursor:"pointer" }} onClick={()=>setExpandedParticipant(isOpen ? null : p.id)}>
+                      <div style={{ display:"flex",alignItems:"center",gap:8,flexWrap:"wrap" }}>
+                        <span style={{ fontSize:14,fontWeight:600,textDecoration:p.is_no_show?"line-through":"none" }}>{p.full_name}</span>
+                        {p.is_leader && <Badge color="#f0a500">⭐ Leader</Badge>}
+                        {p.is_no_show && <Badge color="#f0a500">No Show</Badge>}
+                        <span style={{ fontSize:11,color:"#7a7a9e",marginLeft:"auto" }}>{isOpen ? "▾" : "▸"}</span>
+                      </div>
+                      <div style={{ fontSize:11,color:"#7a7a9e",marginTop:3 }}>
+                        {p.phone && <span>{p.phone} · </span>}
+                        <span style={{ fontFamily:"monospace",color:"#6c63ff" }}>{p.barcode_id}</span>
+                      </div>
                     </div>
-                    <div style={{ fontSize:11,color:"#7a7a9e",marginTop:3 }}>
-                      {p.phone && <span>{p.phone} · </span>}
-                      <span style={{ fontFamily:"monospace",color:"#6c63ff" }}>{p.barcode_id}</span>
+                    <div style={{ display:"flex",gap:4,flexWrap:"wrap",justifyContent:"flex-end" }}>
+                      <button style={{ ...S.btn(false),padding:"5px 10px",fontSize:11 }} onClick={()=>setQrModal(p)}>QR</button>
+                      {isAdmin && <>
+                        <button style={{ ...S.btn(false),padding:"5px 10px",fontSize:11,color:p.is_leader?"#f0a500":"#b0b0d0" }} title="Toggle leader" onClick={()=>toggleLeader(p)}>⭐</button>
+                        <button style={{ ...S.btn(false),padding:"5px 10px",fontSize:11,color:p.is_no_show?"#f0a500":"#b0b0d0",background:p.is_no_show?"rgba(240,165,0,0.18)":undefined }} title={p.is_no_show ? "Clear no-show" : "Mark as no-show"} onClick={()=>toggleNoShow(p)}><XIcon/></button>
+                        <button style={{ ...S.btn(false),padding:"5px 10px",color:"#ff5050" }} title="Delete" onClick={()=>deleteParticipant(p.id)}><TrashIcon/></button>
+                      </>}
                     </div>
                   </div>
-                  <div style={{ display:"flex",gap:4 }}>
-                    <button style={{ ...S.btn(false),padding:"5px 10px",fontSize:11 }} onClick={()=>setQrModal(p)}>QR</button>
-                    {isAdmin && <>
-                      <button style={{ ...S.btn(false),padding:"5px 10px",fontSize:11,color:p.is_leader?"#f0a500":"#b0b0d0" }} onClick={()=>toggleLeader(p)}>⭐</button>
-                      <button style={{ ...S.btn(false),padding:"5px 10px",color:"#ff5050" }} onClick={()=>deleteParticipant(p.id)}><TrashIcon/></button>
-                    </>}
-                  </div>
+                  {isOpen && (
+                    <div style={{ marginTop:12,paddingTop:12,borderTop:"1px solid rgba(108,99,255,0.12)" }}>
+                      <ParticipantDetails p={p} questions={formQuestions}/>
+                    </div>
+                  )}
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
@@ -942,14 +1072,17 @@ function AdminApp() {
           const members = eventApproved.filter(p => p.group_id === g.id && !p.is_leader);
           return (
             <div key={g.id} style={S.card}>
-              <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10 }}>
+              <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,gap:8 }}>
                 <div style={{ fontSize:15,fontWeight:700 }}>{g.name}</div>
-                <Badge>{members.length + (leader?1:0)} members</Badge>
+                <div style={{ display:"flex",alignItems:"center",gap:6 }}>
+                  <Badge>{members.length + (leader?1:0)} members</Badge>
+                  {isAdmin && <button style={{ ...S.btn(false),padding:"5px 10px",color:"#ff5050" }} title="Delete group" onClick={()=>deleteGroup(g)}><TrashIcon/></button>}
+                </div>
               </div>
               {leader && <div style={{ display:"flex",alignItems:"center",gap:8,padding:"8px 12px",background:"rgba(240,165,0,0.08)",borderRadius:10,marginBottom:8 }}><span>⭐</span><span style={{ fontSize:13,fontWeight:600,color:"#f0a500" }}>{leader.full_name}</span></div>}
               {members.map(m => (
                 <div key={m.id} style={{ display:"flex",alignItems:"center",justifyContent:"space-between",padding:"6px 12px",borderRadius:8,background:"rgba(108,99,255,0.04)",marginBottom:4 }}>
-                  <span style={{ fontSize:13 }}>{m.full_name}</span>
+                  <span style={{ fontSize:13,textDecoration:m.is_no_show?"line-through":"none",opacity:m.is_no_show?0.6:1 }}>{m.full_name}{m.is_no_show && " (No Show)"}</span>
                   {isAdmin && <button style={{ ...S.btn(false),padding:"3px 8px",fontSize:11 }} onClick={()=>removeFromGroup(m.id)}>✕</button>}
                 </div>
               ))}
@@ -989,18 +1122,19 @@ function AdminApp() {
             {scanResult.success ? <><CheckIcon/> {scanResult.name} — checked in!</> : <>⚠️ Code "{scanResult.code}" not found</>}
           </div>
         )}
-        <div style={{ display:"flex",gap:8,marginBottom:16 }}>
+        <div style={{ display:"flex",gap:8,marginBottom:16,flexWrap:"wrap" }}>
           <div style={S.stat}><div style={S.statNum}>{presentCount}</div><div style={S.statLabel}>Present</div></div>
-          <div style={S.stat}><div style={{ ...S.statNum,background:"linear-gradient(135deg,#ff5050,#ff8888)",WebkitBackgroundClip:"text" }}>{eventApproved.length-presentCount}</div><div style={S.statLabel}>Absent</div></div>
+          <div style={S.stat}><div style={{ ...S.statNum,background:"linear-gradient(135deg,#ff5050,#ff8888)",WebkitBackgroundClip:"text" }}>{eventApproved.length-presentCount-noShowCount}</div><div style={S.statLabel}>Absent</div></div>
+          {noShowCount > 0 && <div style={S.stat}><div style={{ ...S.statNum,background:"linear-gradient(135deg,#f0a500,#ffc107)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent" }}>{noShowCount}</div><div style={S.statLabel}>No Show</div></div>}
           <div style={S.stat}><div style={S.statNum}>{eventApproved.length>0?Math.round(presentCount/eventApproved.length*100):0}%</div><div style={S.statLabel}>Rate</div></div>
         </div>
         <div style={{ maxHeight:"50vh",overflowY:"auto" }}>
           {eventApproved.map(p => {
             const att = eventAttendance.find(a => a.participant_id === p.id);
             return (
-              <div key={p.id} style={{ ...S.card,padding:12,display:"flex",alignItems:"center",justifyContent:"space-between",borderColor:att?.checked_in?"rgba(0,210,120,0.25)":undefined,background:att?.checked_in?"rgba(0,210,120,0.04)":undefined }}>
+              <div key={p.id} style={{ ...S.card,padding:12,display:"flex",alignItems:"center",justifyContent:"space-between",borderColor:att?.checked_in?"rgba(0,210,120,0.25)":p.is_no_show?"rgba(240,165,0,0.25)":undefined,background:att?.checked_in?"rgba(0,210,120,0.04)":p.is_no_show?"rgba(240,165,0,0.04)":undefined,opacity:p.is_no_show?0.7:1 }}>
                 <div>
-                  <div style={{ fontSize:14,fontWeight:600 }}>{p.full_name} {p.is_leader && <Badge color="#f0a500">Leader</Badge>}</div>
+                  <div style={{ fontSize:14,fontWeight:600,textDecoration:p.is_no_show?"line-through":"none" }}>{p.full_name} {p.is_leader && <Badge color="#f0a500">Leader</Badge>} {p.is_no_show && <Badge color="#f0a500">No Show</Badge>}</div>
                   <div style={{ fontSize:11,color:"#7a7a9e",fontFamily:"monospace" }}>
                     {p.barcode_id}
                     {att?.checked_in && <span style={{ color:"#00d278",marginLeft:8 }}>✓ {new Date(att.check_in_time).toLocaleTimeString()}</span>}
@@ -1029,10 +1163,11 @@ function AdminApp() {
         </div>
         <div style={S.card}>
           <div style={{ fontSize:14,fontWeight:700,marginBottom:12 }}>Summary</div>
-          <div style={{ display:"flex",gap:8,marginBottom:16 }}>
+          <div style={{ display:"flex",gap:8,marginBottom:16,flexWrap:"wrap" }}>
             <div style={S.stat}><div style={S.statNum}>{eventApproved.length}</div><div style={S.statLabel}>Total</div></div>
             <div style={S.stat}><div style={{ ...S.statNum,background:"linear-gradient(135deg,#00d278,#00b868)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent" }}>{presentCount}</div><div style={S.statLabel}>Present</div></div>
-            <div style={S.stat}><div style={{ ...S.statNum,background:"linear-gradient(135deg,#ff5050,#ff8888)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent" }}>{eventApproved.length-presentCount}</div><div style={S.statLabel}>Absent</div></div>
+            <div style={S.stat}><div style={{ ...S.statNum,background:"linear-gradient(135deg,#ff5050,#ff8888)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent" }}>{eventApproved.length-presentCount-noShowCount}</div><div style={S.statLabel}>Absent</div></div>
+            {noShowCount > 0 && <div style={S.stat}><div style={{ ...S.statNum,background:"linear-gradient(135deg,#f0a500,#ffc107)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent" }}>{noShowCount}</div><div style={S.statLabel}>No Show</div></div>}
             <div style={S.stat}><div style={S.statNum}>{rate}%</div><div style={S.statLabel}>Rate</div></div>
           </div>
           <div style={{ background:"rgba(255,80,80,0.2)",borderRadius:8,height:10,overflow:"hidden" }}>
@@ -1078,6 +1213,36 @@ function AdminApp() {
               <div style={{ display:"flex",gap:4 }}>
                 <button style={{ ...S.btn(false),padding:"6px 10px",fontSize:11 }} onClick={()=>openEditQuestion(q)}>Edit</button>
                 <button style={{ ...S.btn(false),padding:"6px 10px",color:"#ff5050" }} onClick={()=>deleteQuestion(q.id)}><TrashIcon/></button>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  const renderPledges = () => {
+    if (!isAdmin) return <div style={{ padding:16 }}><div style={{ ...S.card,textAlign:"center",padding:40,color:"#7a7a9e" }}><div style={{ fontSize:36,marginBottom:12 }}>🔒</div><div>Only admins can manage pledges</div></div></div>;
+    return (
+      <div style={{ padding:16 }}>
+        <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16 }}>
+          <h2 style={{ margin:0,fontSize:18,fontWeight:700 }}>Pledges / التعهدات</h2>
+          <button style={S.btn(true)} onClick={openAddPledge}><PlusIcon/> Add</button>
+        </div>
+        <div style={{ fontSize:12,color:"#7a7a9e",marginBottom:12,background:"rgba(108,99,255,0.06)",padding:"10px 14px",borderRadius:10 }}>
+          💡 Registrants must agree to every pledge before submitting. Changes apply to all future registrations.
+        </div>
+        {pledgesList.length === 0 ? (
+          <div style={{ ...S.card,textAlign:"center",padding:40,color:"#7a7a9e" }}>
+            <div style={{ fontSize:36,marginBottom:12 }}>📝</div><div>No pledges yet.</div>
+          </div>
+        ) : pledgesList.map(pl => (
+          <div key={pl.id} style={S.card}>
+            <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8 }}>
+              <div style={{ flex:1,minWidth:0,fontSize:14,direction:"rtl",textAlign:"right",fontFamily:"'Tajawal',sans-serif",lineHeight:1.7 }}>{pl.label_ar}</div>
+              <div style={{ display:"flex",gap:4,flexShrink:0 }}>
+                <button style={{ ...S.btn(false),padding:"6px 10px",fontSize:11 }} onClick={()=>openEditPledge(pl)}>Edit</button>
+                <button style={{ ...S.btn(false),padding:"6px 10px",color:"#ff5050" }} onClick={()=>deletePledge(pl.id)}><TrashIcon/></button>
               </div>
             </div>
           </div>
@@ -1143,7 +1308,13 @@ function AdminApp() {
               <div style={{ flex:1 }}><label style={S.label}>End Time</label><input id="ev-etime" type="time" style={S.input}/></div>
             </div>
             <div style={{ marginBottom:14 }}><label style={S.label}>Location</label><input id="ev-loc" style={S.input}/></div>
-            <div style={{ marginBottom:18 }}><label style={S.label}>Description</label><textarea id="ev-desc" style={{ ...S.input,minHeight:70,resize:"vertical" }}/></div>
+            <div style={{ marginBottom:18 }}>
+              <label style={S.label}>Description</label>
+              <textarea id="ev-desc" style={{ ...S.input,minHeight:120,resize:"vertical",fontFamily:"inherit" }} placeholder={"Write multiple paragraphs (separate with a blank line).\n\nTo add bullets, start lines with - or •:\n- First point\n- Second point"}/>
+              <div style={{ fontSize:11,color:"#7a7a9e",marginTop:6,lineHeight:1.5 }}>
+                💡 Separate paragraphs with a blank line. Start lines with <code style={{ color:"#6c63ff" }}>-</code> or <code style={{ color:"#6c63ff" }}>•</code> to create bullet points.
+              </div>
+            </div>
             <div style={{ display:"flex",gap:8,justifyContent:"flex-end" }}>
               <button style={S.btn(false)} onClick={()=>setModal(null)}>Cancel</button>
               <button style={S.btn(true)} onClick={createEvent}>Create</button>
@@ -1212,6 +1383,22 @@ function AdminApp() {
               <button style={S.btn(true)} onClick={saveQuestion}>{questionDraft.id ? 'Save' : 'Add Question'}</button>
             </div>
           </>)}
+          {modal === "pledge" && pledgeDraft && (<>
+            <h3 style={{ margin:"0 0 18px",fontSize:18,fontWeight:700 }}>{pledgeDraft.id ? 'Edit Pledge' : 'Add Pledge'}</h3>
+            <div style={{ marginBottom:18 }}>
+              <label style={S.label}>Pledge Text (Arabic) *</label>
+              <textarea
+                style={{ ...S.input,direction:"rtl",textAlign:"right",fontFamily:"'Tajawal',sans-serif",minHeight:100,resize:"vertical" }}
+                placeholder="اكتب نص التعهد هنا"
+                value={pledgeDraft.label_ar}
+                onChange={e=>setPledgeDraft(d=>({...d,label_ar:e.target.value}))}
+              />
+            </div>
+            <div style={{ display:"flex",gap:8,justifyContent:"flex-end" }}>
+              <button style={S.btn(false)} onClick={()=>{setModal(null);setPledgeDraft(null);}}>Cancel</button>
+              <button style={S.btn(true)} onClick={savePledge}>{pledgeDraft.id ? 'Save' : 'Add Pledge'}</button>
+            </div>
+          </>)}
         </div>
       </div>
     );
@@ -1234,7 +1421,7 @@ function AdminApp() {
       </div>
       <div style={S.tabs}>
         {TABS.map((t,i) => {
-          if (t === "Questions" && !isAdmin) return null;
+          if ((t === "Questions" || t === "Pledges") && !isAdmin) return null;
           return (
             <button key={t} style={S.tab(tab===i)} onClick={()=>setTab(i)}>
               {t}
@@ -1250,6 +1437,7 @@ function AdminApp() {
       {tab===4 && renderAttendance()}
       {tab===5 && renderReports()}
       {tab===6 && renderQuestions()}
+      {tab===7 && renderPledges()}
       {renderModal()}
     </div>
   );
